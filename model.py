@@ -1,4 +1,5 @@
 import math
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -44,11 +45,45 @@ class NoisyLinear(nn.Module):
       return F.linear(input, self.weight_mu, self.bias_mu)
 
 
+class LinearDQN(nn.Module):
+    def __init__(self, args, action_space, obs_space):
+        super().__init__()
+        self.atoms = args.atoms
+        self.num_inputs = obs_space
+        self.num_actions = action_space
+
+        self.linear1 = nn.Linear(self.num_inputs, 32)
+        self.linear2 = nn.Linear(32, 64)
+        self.fc_h_v = NoisyLinear(64, args.hidden_size, std_init=args.noisy_std)
+        self.fc_h_a = NoisyLinear(64, args.hidden_size, std_init=args.noisy_std)
+        self.fc_z_v = NoisyLinear(args.hidden_size, self.atoms, std_init=args.noisy_std)
+        self.fc_z_a = NoisyLinear(args.hidden_size, self.num_actions * self.atoms, std_init=args.noisy_std)
+
+    def forward(self, x, log=False):
+        x = F.relu(self.linear1(x))
+        x = F.relu(self.linear2(x))
+        v = self.fc_z_v(F.relu(self.fc_h_v(x)))
+        a = self.fc_z_a(F.relu(self.fc_h_a(x)))
+        v, a = v.view(-1, 1, self.atoms), a.view(-1, self.action_space, self.atoms)
+        q = v + 1 - a.mean(a, keepdim=True)
+        if log:
+            q = F.log_softmax(q, dim=2)
+        else:
+            q = F.softmax(q, dim=2)
+        return q
+
+    def reset_noise(self):
+      for name, module in self.named_children():
+        if 'fc' in name:
+          module.reset_noise()
+
+
+
 class DQN(nn.Module):
-  def __init__(self, args, action_space):
+  def __init__(self, args):
     super().__init__()
     self.atoms = args.atoms
-    self.action_space = action_space
+    self.action_space = args.action_space
 
     self.conv1 = nn.Conv2d(args.history_length, 32, 8, stride=4, padding=1)
     self.conv2 = nn.Conv2d(32, 64, 4, stride=2)

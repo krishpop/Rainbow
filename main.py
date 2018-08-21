@@ -3,16 +3,20 @@ from datetime import datetime
 import random
 import torch
 
+import numpy as np
 from agent import Agent
 from env import Env
 from memory import ReplayMemory
 from test import test
 
+from gym_sai2.envs import Peg1Env
+
 
 parser = argparse.ArgumentParser(description='Rainbow')
 parser.add_argument('--seed', type=int, default=123, help='Random seed')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
-parser.add_argument('--game', type=str, default='space_invaders', help='ATARI game')
+parser.add_argument('--env', type=str, default='peg1-v0', help='ATARI env')
+parser.add_argument('--linear', type=bool, default=True, help='')
 parser.add_argument('--T-max', type=int, default=int(50e6), metavar='STEPS', help='Number of training steps (4x number of frames)')
 parser.add_argument('--max-episode-length', type=int, default=int(108e3), metavar='LENGTH', help='Max episode length (0 to disable)')
 parser.add_argument('--history-length', type=int, default=4, metavar='T', help='Number of consecutive states processed')
@@ -63,13 +67,19 @@ def log(s):
 
 
 # Environment
-env = Env(args)
-env.train()
-action_space = env.action_space()
+if args.env == "peg1-v0":
+    env = Peg1Env(controller_type="POS_DISCRETE")
+    action_space = np.prod(env.action_space.shape)
+    obs_space = env.obs_dim
+else:
+    env = Env(args)
+    env.train()
+    action_space = env.action_space()
+    obs_space = None
 
 
 # Agent
-dqn = Agent(args, env)
+dqn = Agent(args, env, action_space, obs_space, args.linear)
 mem = ReplayMemory(args, args.memory_capacity)
 priority_weight_increase = (1 - args.priority_weight) / (args.T_max - args.learn_start)
 
@@ -81,7 +91,12 @@ while T < args.evaluation_size:
   if done:
     state, done = env.reset(), False
 
-  next_state, _, done = env.step(random.randint(0, action_space - 1))
+  action = random.randint(0, action_space - 1)
+  if args.env == 'peg1-v0':
+    action = np.array([action // 16, action % 16 // 4, action % 4])
+    next_state, _, done, _ = env.step(action)
+  else:
+    next_state, _, done = env.step(action)
   val_mem.append(state, None, None, done)
   state = next_state
   T += 1
@@ -97,12 +112,18 @@ else:
   while T < args.T_max:
     if done:
       state, done = env.reset(), False
-    
+
     if T % args.replay_frequency == 0:
       dqn.reset_noise()  # Draw a new set of noisy weights
 
+    if args.env == 'peg1-v0':
+      state = torch.tensor(state)
     action = dqn.act(state)  # Choose an action greedily (with noisy weights)
-    next_state, reward, done = env.step(action)  # Step
+    if args.env == "peg1-v0":
+        action = np.array([action // 16, action % 16 // 4, action % 4])
+        next_state, reward, done, _ = env.step(action)  # Step
+    else:
+        next_state, reward, done = env.step(action)  # Step
     if args.reward_clip > 0:
       reward = max(min(reward, args.reward_clip), -args.reward_clip)  # Clip rewards
     mem.append(state, action, reward, done)  # Append transition to memory

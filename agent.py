@@ -3,12 +3,12 @@ import random
 import torch
 from torch import optim
 
-from model import DQN
+from model import DQN, LinearDQN
 
 
 class Agent():
-  def __init__(self, args, env):
-    self.action_space = env.action_space()
+  def __init__(self, args, env, action_space, obs_space=None, linear=False):
+    self.action_space = action_space
     self.atoms = args.atoms
     self.Vmin = args.V_min
     self.Vmax = args.V_max
@@ -17,14 +17,21 @@ class Agent():
     self.batch_size = args.batch_size
     self.n = args.multi_step
     self.discount = args.discount
+    self.linear = linear
 
-    self.online_net = DQN(args, self.action_space).to(device=args.device)
+    if self.linear:
+      self.online_net = LinearDQN(args, action_space, obs_space).to(device=args.device)
+    else:
+      self.online_net = DQN(args).to(device=args.device)
     if args.model and os.path.isfile(args.model):
       # Always load tensors onto CPU by default, will shift to GPU if necessary
       self.online_net.load_state_dict(torch.load(args.model, map_location='cpu'))
     self.online_net.train()
 
-    self.target_net = DQN(args, self.action_space).to(device=args.device)
+    if self.linear:
+      self.target_net = LinearDQN(args, action_space, obs_space).to(device=args.device)
+    else:
+      self.target_net = DQN(args).to(device=args.device)
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():
@@ -39,7 +46,9 @@ class Agent():
   # Acts based on single state (no batch)
   def act(self, state):
     with torch.no_grad():
-      return (self.online_net(state.unsqueeze(0)) * self.support).sum(2).argmax(1).item()
+      if not self.linear:
+        state = state.unsqueeze(0)
+      return (self.online_net(state) * self.support).sum(2).argmax(1).item()
 
   # Acts with an ε-greedy policy (used for evaluation only)
   def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
